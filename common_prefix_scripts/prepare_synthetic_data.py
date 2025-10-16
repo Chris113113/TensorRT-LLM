@@ -64,7 +64,7 @@ def token_norm_dist(root_args, **kwargs):
     input_ids = []
     input_lens = []
     output_lens = []
-
+    
     input_lens = get_norm_dist_lengths(kwargs['input_mean'],
                                        kwargs['input_stdev'],
                                        kwargs['num_requests'],
@@ -72,10 +72,11 @@ def token_norm_dist(root_args, **kwargs):
 
     num_reqs = len(input_lens)
     output_lens = get_norm_dist_lengths(kwargs['output_mean'],
-                                        kwargs['output_stdev'], num_reqs,
+                                        kwargs['output_stdev'],
+                                        kwargs['num_requests'],
                                         root_args.random_seed)
 
-    common_prefix_len = root_args.common_prefix_len
+    common_prefix_len = kwargs['common_prefix_len']
     common_prefix = []
     if common_prefix_len > 0:
         # Using a different seed for the prefix to not interfere with the main data generation
@@ -159,7 +160,7 @@ def token_unif_dist(root_args, **kwargs):
     output_lens = get_unif_dist_lengths(kwargs['output_min'],
                                         kwargs['output_max'], num_reqs,
                                         root_args.random_seed)
-
+    
     common_prefix_len = kwargs['common_prefix_len']
     common_prefix = []
     if common_prefix_len > 0:
@@ -201,4 +202,3 @@ def token_unif_dist(root_args, **kwargs):
                            output_lens,
                            task_ids=print_task_ids,
                            lora_config=lora_config)
-
