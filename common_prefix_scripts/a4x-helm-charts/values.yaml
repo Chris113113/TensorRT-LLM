@@ -1,0 +1,45 @@
+# Default values for tensorrt-llm-jobset.
+# This is a YAML-formatted file.
+# Declare variables to be passed into your templates.
+
+replicaCount: 1
+
+image:
+  repository: us-central1-docker.pkg.dev/supercomputer-testing/pirillo-gcr/trtllm-bench-arm64 
+  pullPolicy: Always
+  tag: "latest"
+
+modelName: "Qwen/Qwen3-32B-FP8"
+tp: 1
+backend: "pytorch"
+useGsUtilCopy: true
+
+quantizations:
+  - "FP8"
+  - "NVFP4"
+
+gcs:
+  bucket: pirillo-sct-bucket
+  modelCacheSrcDir: "/mnt/disk/models/huggingface_model_cache/"
+
+benchmarks:
+  - isl: 1024
+    osl: 4096
+    commonPrefixLen: 0
+    numPrompts: 2500
+  - isl: 2048
+    osl: 8192
+    commonPrefixLen: 0
+    numPrompts: 2500
+  - isl: 4096
+    osl: 1024
+    commonPrefixLen: 3600
+    numPrompts: 2500
+  - isl: 8192
+    osl: 2048
+    commonPrefixLen: 7900
+    numPrompts: 2500
+  - isl: 39960
+    osl: 1000
+    commonPrefixLen: 0
+    numPrompts: 500

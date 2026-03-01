@@ -1,0 +1,140 @@
+apiVersion: v1
+kind: Pod
+metadata:
+  name: "{{ .Release.Name }}-tensorrt-llm-pod"
+  labels:
+    app: tensorrt-llm
+  annotations:
+    gke-gcsfuse/volumes: "true"
+spec:
+  nodeSelector:
+    cloud.google.com/gke-accelerator: nvidia-gb200
+    cloud.google.com/gke-ephemeral-storage-local-ssd: "true"
+  tolerations:
+  - key: nvidia.com/gpu
+    operator: Equal
+    value: present
+    effect: NoSchedule
+  - key: kubernetes.io/arch
+    operator: Equal
+    value: arm64
+    effect: NoSchedule
+  setHostnameAsFQDN: true
+  volumes:
+  - name: gib
+    hostPath:
+      path: /home/kubernetes/bin/gib
+  - name: nvidia
+    hostPath:
+      path: /home/kubernetes/bin/nvidia
+  - name: lib64
+    hostPath:
+      path: /lib64
+  - name: shared-memory
+    emptyDir:
+      medium: "Memory"
+      sizeLimit: 250Gi
+  - name: scratch-volume
+    emptyDir: {}
+  - name: gcsfuse
+    csi:
+      driver: gcsfuse.csi.storage.gke.io
+      volumeAttributes:
+        bucketName: {{ .Values.gcs.bucket }}
+        mountOptions: "implicit-dirs"
+  restartPolicy: Never
+  containers:
+    - name: tensorrt-llm
+      image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+      imagePullPolicy: {{ .Values.image.pullPolicy }}
+      command: [ "/bin/bash", "-c" ]
+      args:
+        - |-
+          set -x
+          
+          # Set up cache directory
+          CACHE_DIR="/cache/huggingface_model_cache"
+          mkdir -p "$CACHE_DIR"
+
+          # Copy model to cache
+          SANITIZED_MODEL_NAME="$(echo ${MODEL_NAME} | sed 's/\//--/g')"
+          MODEL_PATH_SRC="${MODEL_CACHE_SRC_DIR}/models--${SANITIZED_MODEL_NAME}"
+          
+          if [ -d "$MODEL_PATH_SRC" ]; then
+            echo "Copying model from $MODEL_PATH_SRC to $CACHE_DIR"
+            if [ -n "$USE_GSUTIL_COPY" ]; then
+              pip install proto-plus==1.24.0.dev1
+              time gsutil -m cp -r -v "gs://{{ .Values.gcs.bucket }}/huggingface_model_cache/models--${SANITIZED_MODEL_NAME}" "$CACHE_DIR"
+              # Get the snapshot ID from the refs file
+              SNAPSHOT_ID=$(cat "${CACHE_DIR}/models--${SANITIZED_MODEL_NAME}/refs/main")
+              export MODEL_PATH_IN_CACHE="${CACHE_DIR}/models--${SANITIZED_MODEL_NAME}/snapshots/${SNAPSHOT_ID}"       
+            # else
+              # Keeping this in case we decide to use GCSFuse again, but it was way slower than gsutil.
+              # time cp -r -v "$MODEL_PATH_SRC" "$CACHE_DIR"
+            fi
+          else
+            echo "Warning: Model not found in GCS cache, will attempt to download."
+          fi
+
+          export HF_HOME="$CACHE_DIR"
+          # export HF_HOME="${MODEL_CACHE_SRC_DIR}"
+          export HF_HUB_CACHE="$CACHE_DIR"
+          # export HF_HUB_CACHE="${MODEL_CACHE_SRC_DIR}"
+          
+          echo "Done setting up cache directory."
+          echo "Updated HF_HOME and HF_HUB_CACHE to $CACHE_DIR"
+
+          LOG_DIR="/mnt/disk/models/trtllm-bench-outputs/$(date +"%Y%m%d_%H%M%S")-${SANITIZED_MODEL_NAME}"
+          mkdir -p "$LOG_DIR"
+          echo "Logging to $LOG_DIR"
+          {{- range $benchmark := .Values.benchmarks }}
+          {{- range $quantization := $.Values.quantizations }}
+          ./run_model_benchmarks.sh \
+            --model-name "${MODEL_NAME}" \
+            --log-dir "${LOG_DIR}" \
+            --tp "${TP}" \
+            --backend "${BACKEND}" \
+            --isl {{ $benchmark.isl }} \
+            --osl {{ $benchmark.osl }} \
+            --common-prefix-len {{ $benchmark.commonPrefixLen }} \
+            --num-prompts {{ $benchmark.numPrompts }} \
+            --quantization {{ $quantization }} \
+            --model-path "${MODEL_PATH_IN_CACHE}"
+          {{- end }}
+          {{- end }}
+      env:
+      - name: MODEL_NAME
+        value: {{ .Values.modelName | quote }}
+      - name: TP
+        value: {{ .Values.tp | quote }}
+      - name: BACKEND
+        value: {{ .Values.backend | quote }}
+      - name: MODEL_CACHE_SRC_DIR
+        value: {{ .Values.gcs.modelCacheSrcDir | quote }}
+      - name: HF_TOKEN
+        valueFrom:
+          secretKeyRef:
+            name: hf-token-secret
+            key: HF_TOKEN
+      - name: LD_LIBRARY_PATH
+        value: /usr/local/nvidia/lib64
+      - name: USE_GSUTIL_COPY
+        value: "true"
+      volumeMounts:
+      - name: nvidia
+        mountPath: /usr/local/nvidia
+      - name: gib
+        mountPath: /usr/local/gib
+      - name: shared-memory
+        mountPath: /dev/shm
+      - name: gcsfuse
+        mountPath: /mnt/disk/models
+      - name: scratch-volume
+        mountPath: /cache
+      resources:
+        limits:
+          nvidia.com/gpu: 4
+          ephemeral-storage: 6000Gi
+        requests:
+          nvidia.com/gpu: 4
+          ephemeral-storage: 6000Gi
